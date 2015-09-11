@@ -44,16 +44,69 @@ Gradle now automatically adds the compile dependencies of each analyzed source s
 
 ### Managed model improvements
 
-TBD: Currently, managed model works well for defining a tree of objects. This release improves support for a graph of objects, with references between different model 
+TBD: Currently, managed model works well for defining a tree of objects. This release improves support for a graph of objects, with references between different model
 elements.
 
 - Can use a reference property as input for a rule.
 
-### Compiler daemon reuse in continuous builds
+### Faster compilation for continuous builds
 
 Many Gradle compilers are spawned as separate daemons to accommodate special heap size settings, classpath configurations, etc.  These compiler daemons are started on use, and stopped at
 the end of the build.  With Gradle 2.8, these compiler daemons are kept running during the lifetime of a continuous build session and only stopped when the continuous build is canceled.
 This improves the performance of continuous builds as the cost of re-spawning these compilers is avoided in between builds.
+
+Note that this improvement reduces the overhead of running forked compilers in continuous mode.  This means that it is not relevant for non-continuous builds or builds where the compiler
+is run in-process.  In practical terms, this means this improvement affects the following scenarios:
+
+- Java compiler - when options.fork = true (default is false)
+- Scala compiler - when scalaCompileOptions.useAnt = false (default is true)
+- Groovy compiler - when options.fork = true (default is true)
+
+The Play Routes compiler, Twirl compiler, Javascript compiler, and Scala compiler always run as forked daemons, so compiler reuse will always
+be used for those compilers when in continuous mode.
+
+### TestKit API exposes method for injecting classes under test
+
+Previous releases of Gradle required the end user to provide classes under test (e.g. plugin and custom task implementations) to the TestKit by assigning them to the buildscript's classpath.
+
+This release makes it more convenient to inject classes under test through the `GradleRunner` API with the method
+[withClasspath(java.util.List)](javadoc/org/gradle/testkit/runner/GradleRunner.html#withClasspath(java.util.List)). This classpath is then available to use to locate plugins in a test build via the
+[plugins DSL](userguide/plugins.html#sec:plugins_block). The following code example demonstrates the use of the new TestKit API in a test class based on the test framework Spock:
+
+    class BuildLogicFunctionalTest extends Specification {
+        @Rule final TemporaryFolder testProjectDir = new TemporaryFolder()
+        File buildFile
+        List<URI> pluginClasspath
+
+        def setup() {
+            buildFile = testProjectDir.newFile('build.gradle')
+            pluginClasspath = getClass().classLoader.findResource("plugin-classpath.txt")
+              .readLines()
+              .collect { new File(it).toURI() }
+        }
+
+        def "execute helloWorld task"() {
+            given:
+            buildFile << """
+                plugins {
+                    id 'com.company.helloworld'
+                }
+            """
+
+            when:
+            def result = GradleRunner.create()
+                .withProjectDir(testProjectDir.root)
+                .withArguments('helloWorld')
+                .withClasspath(pluginClasspath)
+                .build()
+
+            then:
+            result.standardOutput.contains('Hello world!')
+            result.taskPaths(SUCCESS) == [':helloWorld']
+        }
+    }
+
+Future versions of Gradle will aim for automatically injecting the classpath without additional configuration from the end user.
 
 ## Promoted features
 
@@ -78,6 +131,12 @@ The following are the newly deprecated items in this Gradle release. If you have
 <!--
 ### Example deprecation
 -->
+
+### AvailablePortFinder
+
+The class `org.gradle.util.AvailablePortFinder` has been deprecated and will be removed in the next version of Gradle.  Although this class is an internal class and
+not a part of the public API, some users may be utilizing it and should plan to implement an alternative.
+
 
 ## Potential breaking changes
 
@@ -111,7 +170,9 @@ We would like to thank the following community members for making contributions 
 * [Juan Martín Sotuyo Dodero](https://github.com/jsotuyod) - Allow user to configure auxclasspath for PMD
 * [Alpha Hinex](https://github.com/AlphaHinex) - Allow encoding to be specified for Zip task
 * [Brian Johnson](https://github.com/john3300) - Fix AIX support for GRADLE-2799
+* [Alex Muthmann](https://github.com/deveth0) - Documentation fix
 * [Adam Roberts](https://github.com/AdamRoberts) - Specify minimum priority for PMD task
+* [John Wass](https://github.com/jw3) - Documentation fix
 
 We love getting contributions from the Gradle community. For information on contributing, please see [gradle.org/contribute](http://gradle.org/contribute).
 

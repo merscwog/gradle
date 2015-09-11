@@ -37,7 +37,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
-import static org.gradle.model.internal.manage.schema.extract.ModelSchemaUtils.*;
+import static org.gradle.model.internal.manage.schema.extract.ModelSchemaUtils.isMethodDeclaredInManagedType;
+import static org.gradle.model.internal.manage.schema.extract.ModelSchemaUtils.walkTypeHierarchy;
 
 public abstract class ManagedImplStructSchemaExtractionStrategySupport extends StructSchemaExtractionStrategySupport {
 
@@ -257,22 +258,29 @@ public abstract class ManagedImplStructSchemaExtractionStrategySupport extends S
                 }
 
                 if (propertySchema instanceof ModelCollectionSchema) {
-                    if (property.isWritable()) {
-                        throw new InvalidManagedModelElementTypeException(parentContext, String.format(
-                            "property '%s' cannot have a setter (%s properties must be read only).",
-                            property.getName(), property.getType().toString()));
-                    }
-
                     ModelCollectionSchema<P, ?> propertyCollectionsSchema = (ModelCollectionSchema<P, ?>) propertySchema;
 
                     ModelType<?> elementType = propertyCollectionsSchema.getElementType();
                     ModelSchema<?> elementTypeSchema = modelSchemaCache.get(elementType);
 
-                    if (!(elementTypeSchema instanceof ManagedImplModelSchema)) {
-                        throw new InvalidManagedModelElementTypeException(parentContext, String.format(
-                            "property '%s' cannot be a model map of type %s as it is not a %s type.",
-                            property.getName(), elementType, Managed.class.getName()
-                        ));
+                    if (propertySchema instanceof ScalarCollectionSchema) {
+                        if (!ScalarTypes.isScalarType(elementType)) {
+                            throw new InvalidManagedModelElementTypeException(parentContext, String.format(
+                                "property '%s' cannot be a collection of type %s as it is not a scalar type.",
+                                property.getName(), elementType));
+                        }
+                    } else {
+                        if (property.isWritable()) {
+                            throw new InvalidManagedModelElementTypeException(parentContext, String.format(
+                                "property '%s' cannot have a setter (%s properties must be read only).",
+                                property.getName(), property.getType().toString()));
+                        }
+                        if (!(elementTypeSchema instanceof ManagedImplModelSchema)) {
+                            throw new InvalidManagedModelElementTypeException(parentContext, String.format(
+                                "property '%s' cannot be a model map of type %s as it is not a %s type.",
+                                property.getName(), elementType, Managed.class.getName()
+                            ));
+                        }
                     }
                 }
             }

@@ -5,6 +5,7 @@ String jdkVarName = 'JAVA_9'
 
 task java9IntegTest(type: Test) {
     excludes = [
+            'SrcDistributionIntegrationSpec', // source compat 1.5 unsupported
             'MavenConversionIntegrationTest', // source compat 1.5 unsupported
             'ScalaLibraryInitIntegrationTest', // scala compile broken
             'ApplicationIntegrationSpec', // test fixture problem
@@ -30,6 +31,7 @@ task java9IntegTest(type: Test) {
             'InvokeDynamicGroovyCompilerSpec',
             'InProcessJavaCompilerIntegrationTest',
             'IncrementalJavaCompileIntegrationTest', // source compat 1.5 unsupported
+            'SamplesJavaQuickstartIntegrationTest', // source compat 1.5 unsupported
             'JUnitIntegrationTest', // system classloader changed, test expectation is wrong
             'SampleTestNGIntegrationTest', // source compat 1.4 and 1.5 unsupported
             'TestNGIntegrationTest', // source compat 1.4 and 1.5 unsupported
@@ -43,8 +45,9 @@ task java9IntegTest(type: Test) {
             'ZincScalaCompilerIntegrationTest', // scala compile broken
             'ZincScalaCompilerMultiVersionIntegrationTest', // scala compile broken
             'ScalaTestIntegrationTest', // scala compile broken
-            'org.gradle.integtests.tooling', // 2.6 provider fails to start daemon, remove this once 2.7 is released
-    ].collect { "**/*${it}*" }
+            'FunctionalReleaseNotesTest',
+            'StaticReleaseNotesTest',
+    ].collect { "**/*${it}*" } << 'org/gradle/integtests/tooling/**' // 2.6 provider fails to start daemon, remove this once 2.7 is released
 }
 
 task java9Test(type: Test) {

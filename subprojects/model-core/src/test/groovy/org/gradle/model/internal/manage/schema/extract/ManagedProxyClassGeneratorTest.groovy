@@ -15,6 +15,7 @@
  */
 
 package org.gradle.model.internal.manage.schema.extract
+
 import com.google.common.base.Optional
 import com.google.common.collect.ImmutableMap
 import org.gradle.model.internal.core.MutableModelNode
@@ -27,6 +28,8 @@ import org.gradle.model.internal.type.ModelType
 import spock.lang.Ignore
 import spock.lang.Specification
 import spock.lang.Unroll
+
+import java.lang.reflect.Method
 
 import static org.gradle.model.internal.manage.schema.ModelProperty.StateManagementType.*
 
@@ -79,6 +82,53 @@ class ManagedProxyClassGeneratorTest extends Specification {
         then:
         value == 1
         1 * state.get("value") >> { 1 }
+    }
+
+    @Unroll
+    def "only generates the requested boolean getter methods"() {
+        given:
+        def impl = newInstance(type)
+
+        when:
+        def methods = impl.class.declaredMethods
+        def getGetter = methods.find { it.name == 'getFlag' }
+        def isGetter = methods.find { it.name == 'isFlag' }
+
+        then:
+        (getGetter != null) == expectGetGetter
+        (isGetter != null) == expectIsGetter
+
+        where:
+        type           | expectGetGetter | expectIsGetter
+        BooleanGetter1 | true            | false
+        BooleanGetter2 | false           | true
+        BooleanGetter3 | true            | true
+        BooleanGetter4 | true            | true
+        BooleanGetter5 | false           | true
+    }
+
+    static interface BooleanGetter1 {
+        boolean getFlag()
+    }
+
+    static interface BooleanGetter2 {
+        boolean isFlag()
+    }
+
+    static interface BooleanGetter3 {
+        boolean getFlag()
+
+        boolean isFlag()
+    }
+
+    static interface BooleanGetter4 extends BooleanGetter1 {
+        // make sure that getters from parents are used
+        boolean isFlag()
+    }
+
+    static interface BooleanGetter5 extends BooleanGetter2 {
+        // make sure that overrides do not generate duplicates
+        boolean isFlag()
     }
 
     def "equals() returns false for non-compatible types"() {
@@ -144,8 +194,10 @@ class ManagedProxyClassGeneratorTest extends Specification {
         impl instanceof ManagedInstance
         ((ManagedInstance) impl).backingNode == node
 
-        when: impl.unmanagedValue = "Lajos"
-        then: unmanagedInstance.unmanagedValue == "Lajos"
+        when:
+        impl.unmanagedValue = "Lajos"
+        then:
+        unmanagedInstance.unmanagedValue == "Lajos"
 
         when:
         def greeting = impl.sayHello()
@@ -255,7 +307,7 @@ class ManagedProxyClassGeneratorTest extends Specification {
 
         def data = [:]
         def state = Mock(ModelElementState)
-        state.get(_) >> { args->
+        state.get(_) >> { args ->
             data[args[0]]
         }
         state.set(_, _) >> { args ->
@@ -266,7 +318,7 @@ class ManagedProxyClassGeneratorTest extends Specification {
         def instance = proxy.newInstance(state)
 
         then:
-        new GroovyShell(loader,new Binding(instance:instance)).evaluate """
+        new GroovyShell(loader, new Binding(instance: instance)).evaluate """
             instance.primitiveProperty = $value
             assert instance.primitiveProperty == $value
             instance
@@ -286,6 +338,66 @@ class ManagedProxyClassGeneratorTest extends Specification {
     }
 
 
+    @Unroll
+    def "can read and write #value to managed property of type List<#scalarType>"() {
+        def loader = new GroovyClassLoader(getClass().classLoader)
+        when:
+        def clazz = loader.parseClass """
+            interface PrimitiveProperty {
+                List<$scalarType.name> getItems()
+
+                void setItems(List<$scalarType.name> value)
+            }
+        """
+
+
+        def data = [:]
+        def state = Mock(ModelElementState)
+        state.get(_) >> { args ->
+            data[args[0]]
+        }
+        state.set(_, _) >> { args ->
+            data[args[0]] = args[1]
+        }
+        def properties = [property(clazz, 'items', MANAGED)]
+        def proxy = generate(clazz, null, properties)
+        def instance = proxy.newInstance(state)
+
+        then:
+        new GroovyShell(loader, new Binding(instance: instance)).evaluate """
+            instance.items = $value
+            assert instance.items == $value
+            instance
+        """
+
+        where:
+        scalarType | value
+        String     | "null"
+        String     | "['123']"
+        Boolean    | "null"
+        Boolean    | "[true, false]"
+        Character  | "null"
+        Character  | "[(char)'1',(char)'2',(char)'3']"
+        Byte       | "null"
+        Byte       | "[1,2]"
+        Short      | "null"
+        Short      | "[1,2,3]"
+        Integer    | "null"
+        Integer    | "[1,2,3]"
+        Long       | "null"
+        Long       | "[1L,2L,3L]"
+        Float      | "null"
+        Float      | "[1f,2f]"
+        Double     | "null"
+        Double     | "[1d,2d,3d]"
+        BigInteger | "null"
+        BigInteger | "[1G,2G,3G]"
+        BigDecimal | "null"
+        BigDecimal | "[1G,2G,3G]"
+        File       | "null"
+        File       | "[new File('foo')]"
+    }
+
     def <T> T newInstance(Class<T> type) {
         def generated = generate(type)
         return generated.newInstance(Stub(ModelElementState))
@@ -302,30 +414,41 @@ class ManagedProxyClassGeneratorTest extends Specification {
     }
 
     private static def property(Class<?> parentType, String name, StateManagementType stateManagementType) {
-        def getter = parentType.getMethod("get" + name.capitalize());
-        def type = ModelType.returnType(getter)
-        def getterRef = new WeaklyTypeReferencingMethod(ModelType.of(parentType), type, getter)
-        def getterContext = new PropertyAccessorExtractionContext([getter])
+        List<Method> getters = []
+        try {
+            getters << parentType.getMethod("get${name.capitalize()}");
+        } catch (NoSuchMethodException ex) {
+        }
+        try {
+            getters << parentType.getMethod("is${name.capitalize()}");
+        } catch (NoSuchMethodException ex) {
+        }
+        def type = ModelType.returnType(getters[0])
+        def getterRefs = getters.collect { new WeaklyTypeReferencingMethod(ModelType.of(parentType), type, it) }
+        def getterContext = new PropertyAccessorExtractionContext(getters)
         def setterContext;
         try {
-            def setter = parentType.getMethod("set" + name.capitalize(), type.getRawClass())
+            def setter = parentType.getMethod("set${name.capitalize()}", type.getRawClass())
             setterContext = new PropertyAccessorExtractionContext([setter])
         } catch (ignore) {
             setterContext = null
         }
         return new ModelPropertyExtractionResult<?>(
-            ModelProperty.of(type, name, stateManagementType, setterContext != null, Collections.emptySet(), getterRef),
+            ModelProperty.of(type, name, stateManagementType, setterContext != null, Collections.emptySet(), getterRefs),
             getterContext, setterContext)
     }
 
     static interface SomeType {
         Integer getValue()
+
         void setValue(Integer value)
     }
 
     static abstract class SomeTypeWithReadOnly {
         abstract Integer getValue()
+
         abstract void setValue(Integer value)
+
         String getReadOnly() {
             return "read-only"
         }
@@ -333,12 +456,15 @@ class ManagedProxyClassGeneratorTest extends Specification {
 
     static interface PublicUnmanagedType {
         String getUnmanagedValue()
+
         void setUnmanagedValue(String unmanagedValue)
+
         String sayHello()
     }
 
     static interface InternalUnmanagedType extends PublicUnmanagedType {
         Integer add(Integer a, Integer b)
+
         void throwError()
     }
 
@@ -363,27 +489,25 @@ class ManagedProxyClassGeneratorTest extends Specification {
 
     static interface ManagedSubType extends PublicUnmanagedType {
         String getManagedValue()
+
         void setManagedValue(String managedValue)
     }
 
-    static Map<Class<?>, Collection<ModelPropertyExtractionResult<?>>> managedProperties = ImmutableMap.builder()
-        .put(SomeType, [
-           property(SomeType, "value", MANAGED)
+    static Map<Class<?>, Collection<ModelPropertyExtractionResult<?>>> managedProperties =
+        ImmutableMap.copyOf([
+            (SomeType)              : [property(SomeType, "value", MANAGED)],
+            (SomeTypeWithReadOnly)  : [property(SomeTypeWithReadOnly, "value", MANAGED),
+                                       property(SomeTypeWithReadOnly, "readOnly", UNMANAGED)],
+            (PublicUnmanagedType)   : [property(PublicUnmanagedType, "unmanagedValue", UNMANAGED)],
+
+            (ManagedSubType)        : [property(ManagedSubType, "unmanagedValue", DELEGATED),
+                                       property(ManagedSubType, "managedValue", MANAGED)],
+            (SomeTypeWithParameters): [property(SomeTypeWithParameters, "values", MANAGED),
+                                       property(SomeTypeWithParameters, "optional", MANAGED)],
+            (BooleanGetter1)        : [property(BooleanGetter1, "flag", MANAGED)],
+            (BooleanGetter2)        : [property(BooleanGetter2, "flag", MANAGED)],
+            (BooleanGetter3)        : [property(BooleanGetter3, "flag", MANAGED)],
+            (BooleanGetter4)        : [property(BooleanGetter4, "flag", MANAGED)],
+            (BooleanGetter5)        : [property(BooleanGetter5, "flag", MANAGED)],
         ])
-        .put(SomeTypeWithReadOnly, [
-            property(SomeTypeWithReadOnly, "value", MANAGED),
-            property(SomeTypeWithReadOnly, "readOnly", UNMANAGED)
-        ])
-        .put(PublicUnmanagedType, [
-            property(PublicUnmanagedType, "unmanagedValue", UNMANAGED)
-        ])
-        .put(ManagedSubType, [
-            property(ManagedSubType, "unmanagedValue", DELEGATED),
-            property(ManagedSubType, "managedValue", MANAGED)
-        ])
-        .put(SomeTypeWithParameters, [
-            property(SomeTypeWithParameters, "values", MANAGED),
-            property(SomeTypeWithParameters, "optional", MANAGED)
-        ])
-        .build()
 }
